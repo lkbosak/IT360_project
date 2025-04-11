@@ -19,9 +19,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 COMMAND_COLUMNS = {
     "pslist": ["Offset", "Name", "PID", "PPID", "Threads", "Handles", "Time"],
     "psscan": ["Offset", "Name", "PID", "PPID", "Threads", "Handles", "Time"],
-    "netscan": ["Offset", "Proto", "Local_Address", "Remote_Address", "State", "PID", "Process"],
     "dlllist": ["PID", "Process", "Base", "Size", "Path"],
-    "malfind": ["PID", "Process", "Start_Addr", "End_Addr", "Tag", "Protection"]
+    "malfind": ["PID", "Process", "Start_Addr", "End_Addr", "Tag", "Protection"],
+    "connscan": ["Offset", "Local_Address", "Remote_Address", "PID"],
+    "filescan": ["Offset", "Pointer", "Hnd", "Access", "Name"]
 }
 
 def run_volatility(command: List[str]) -> str:
@@ -62,6 +63,21 @@ def parse_volatility_output(output: str, command: str) -> pd.DataFrame:
         data = data_lines
     
     return pd.DataFrame(data, columns=columns)
+#Extract .exe files from from file scan dump
+def parsing_filescan_output(output: str, filter_exe: bool = False) -> pd.DataFrame:
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    data = []
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 5:
+            Offset = parts[0]
+            Pointer = parts[1]
+            Hnd = parts[2]
+            Access = parts[3]
+            Name = " ".join(parts[4:])
+            if not filter_exe or ".exe" in Name.lower():
+                data.append((Offset, Pointer, Hnd, Access, Name))
+    return pd.DataFrame(data, columns=["Offset", "Pointer", "Hnd", "Access", "Name"])
 
 def identify_profile() -> str:
     """Identify memory dump profile with fallback"""
@@ -92,9 +108,10 @@ def analyze_memory(profile: str):
     analyses = {
         "processes": ("pslist", "processes.csv"),
         "hidden_processes": ("psscan", "hidden_processes.csv"),
-        "connections": ("netscan", "connections.csv"),
         "dlls": ("dlllist", "dlls.csv"),
-        "malware": ("malfind", "malware.csv")
+        "malware": ("malfind", "malware.csv"),
+        "connections": ("connscan", "connections.csv"),
+        "executable_files": ("filescan", "fileScan.csv")
     }
     
     results = {}
@@ -102,6 +119,10 @@ def analyze_memory(profile: str):
         print(f"Running {command}...")
         output = run_volatility(["--profile", profile, command])
         df = parse_volatility_output(output, command)
+        if command == "filescan":
+            df = parsing_filescan_output(output, filter_exe=True)
+        else:
+            df = parse_volatility_output(output, command)
         df.to_csv(os.path.join(OUTPUT_DIR, filename), index=False)
         results[name] = df
     
@@ -133,6 +154,7 @@ Summary Statistics:
 - Hidden Processes: {len(results.get('hidden_processes', []))}
 - Network Connections: {len(results.get('connections', []))}
 - Malware Findings: {len(results.get('malware', []))}
+- Executable Files: {len(results.get('executable_files', []))}
 """
     with open(os.path.join(OUTPUT_DIR, "report.txt"), "w") as f:
         f.write(report)
